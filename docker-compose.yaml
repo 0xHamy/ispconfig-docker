@@ -2,7 +2,8 @@ services:
   ispconfig:
     build: .
     container_name: ispconfig
-    privileged: true
     restart: unless-stopped
     ports:
       - "8800:8080"
+    environment:
+      - ISP_AUTOINSTALL_FLAGS=--no-mail --no-dns --no-ftp --no-roundcube --no-mailman --no-pma --no-firewall --no-jailkit --no-quota --no-ntp --use-ftp-ports=40110-40210 --unattended-upgrades --i-know-what-i-am-doing

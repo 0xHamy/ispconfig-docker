@@ -1,64 +1,49 @@
-FROM ubuntu:24.04
+FROM ubuntu:20.04
 
-ENV DEBIAN_FRONTEND=noninteractive
-WORKDIR /root
+# Avoid tzdata prompts during build
+ARG DEBIAN_FRONTEND=noninteractive
 
-# Install ISPConfig dependencies
-RUN apt-get update && apt-get install -y \
-    apache2 libapache2-mod-php \
-    mariadb-server mariadb-client \
-    php php-cli php-common php-mysql php-curl php-mbstring php-gd php-soap php-intl php-xml php-zip php-imap php-fpm \
-    postfix postfix-mysql \
-    dovecot-core dovecot-imapd dovecot-pop3d dovecot-mysql \
-    bind9 dnsutils \
-    pure-ftpd-mysql \
-    rspamd redis-server \
-    clamav clamav-daemon spamassassin \
-    certbot \
-    supervisor cron rsyslog wget unzip tar git \
-    libunwind-dev libpcre2-8-0 \
-    && rm -rf /var/lib/apt/lists/*
+# -------- Base OS & tools
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends \
+      ca-certificates curl wget gnupg apt-transport-https \
+      lsb-release locales tzdata \
+      supervisor cron rsyslog logrotate \
+      openssl git procps iproute2 net-tools dnsutils \
+      apache2 libapache2-mod-php php php-cli php-common php-mysql \
+      mariadb-server mariadb-client \
+      && rm -rf /var/lib/apt/lists/*
 
-# MariaDB: create socket dir and initialize data dir (no systemd in container)
-RUN mkdir -p /run/mysqld && chown mysql:mysql /run/mysqld
-RUN mariadb-install-db --user=mysql --datadir=/var/lib/mysql
+# Make /bin/sh use bash (the classic ISPConfig guides require it)
+RUN ln -sf /bin/bash /bin/sh
 
-# (Optional) seed ClamAV db so clamd can start if you ever enable it
-RUN freshclam || true
+# Supervisor + runtime dirs
+RUN mkdir -p /var/log/supervisor /run/mysqld && chown mysql:mysql /run/mysqld
 
-# Copy ISPConfig tarball from build context
-COPY ISPConfig-3.3.0p2.tar.gz /root/
+# Sane hostname inside the container (helps the installer)
+RUN printf "server1.example.com\n" > /etc/hostname && \
+    sed -i '1i127.0.1.1 server1.example.com server1' /etc/hosts
 
-# Extract ISPConfig
-RUN tar xvf ISPConfig-3.3.0p2.tar.gz -C /root/ && rm ISPConfig-3.3.0p2.tar.gz
+# We’ll run the ISPConfig autoinstaller at *container start* (not at build)
+# so services are present and DB is reachable. You can tweak services via this env:
+ENV ISP_AUTOINSTALL_FLAGS="--no-mail --no-dns --no-ftp --no-roundcube --no-mailman --no-pma --no-firewall --no-jailkit --no-quota --no-ntp --use-ftp-ports=40110-40210 --unattended-upgrades --i-know-what-i-am-doing"
 
-# Autoinstall answers
-COPY autoinstall.ini /root/ispconfig3_install/install/autoinstall.ini
+# Web panel listen port inside container (Apache vhost will be 8080)
+ENV PANEL_PORT=8080
 
-# Supervisor config
+# Copy our files
+COPY entrypoint.sh /entrypoint.sh
 COPY supervisord.conf /etc/supervisor/conf.d/supervisord.conf
+RUN chmod +x /entrypoint.sh
 
-# Run ISPConfig installer (ignore non-zero to keep build going if services aren't up yet)
-RUN php /root/ispconfig3_install/install/install.php --autoinstall=/root/ispconfig3_install/install/autoinstall.ini || true
-
-# Ensure Apache listens on 8080 and has an ISPConfig vhost
-RUN echo "Listen 8080" >> /etc/apache2/ports.conf && \
-    cat <<'EOF' > /etc/apache2/sites-available/ispconfig.vhost.conf
-<VirtualHost *:8080>
-    ServerAdmin webmaster@localhost
-    DocumentRoot /usr/local/ispconfig/interface/web
-    <Directory /usr/local/ispconfig/interface/web>
-        AllowOverride All
-        Require all granted
-    </Directory>
-    ErrorLog ${APACHE_LOG_DIR}/ispconfig_error.log
-    CustomLog ${APACHE_LOG_DIR}/ispconfig_access.log combined
-</VirtualHost>
-EOF
-
-# Enable the site (a2ensite expects the .conf name, not a path)
-RUN a2ensite ispconfig.vhost.conf
+# Enable Apache modules and switch Apache to :8080 globally
+RUN a2enmod php7.4 dir rewrite headers && \
+    sed -i 's/^[[:space:]]*Listen 80/# Listen 80/' /etc/apache2/ports.conf && \
+    grep -q '^Listen 8080' /etc/apache2/ports.conf || echo 'Listen 8080' >> /etc/apache2/ports.conf && \
+    printf "ServerName ispconfig.local\n" > /etc/apache2/conf-available/servername.conf && \
+    a2enconf servername
 
 EXPOSE 8080
 
-CMD ["/usr/bin/supervisord", "-n"]
+# Start everything via our entrypoint (runs autoinstaller once, then serves panel)
+CMD ["/entrypoint.sh"]
