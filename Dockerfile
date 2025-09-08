@@ -35,7 +35,7 @@ RUN echo "postfix postfix/main_mailer_type select Internet Site" | debconf-set-s
     && apt-get install -y \
         postfix postfix-mysql postfix-doc \
         mariadb-client mariadb-server \
-        openssl getmail6 rkhunter binutils \
+        openssl getmail4 rkhunter binutils \
         dovecot-imapd dovecot-pop3d dovecot-mysql dovecot-sieve \
         sudo patch \
     && apt-get clean
@@ -57,15 +57,19 @@ RUN sed -i '/^#submission inet n/s/^#//' /etc/postfix/master.cf \
 # Configure MariaDB to listen on all interfaces
 RUN sed -i 's/bind-address\s*=\s*127.0.0.1/#bind-address = 127.0.0.1/' /etc/mysql/mariadb.conf.d/50-server.cnf
 
-# Secure MariaDB installation non-interactively
-RUN /usr/bin/mysqld_safe --skip-grant-tables & \
-    sleep 10 \
-    && mysql -u root -e "FLUSH PRIVILEGES;" \
-    && mysql -u root -e "ALTER USER 'root'@'localhost' IDENTIFIED BY '$MYSQL_ROOT_PASSWORD';" \
-    && mysql -u root -e "DELETE FROM mysql.user WHERE User='';" \
-    && mysql -u root -e "DELETE FROM mysql.user WHERE User='root' AND Host NOT IN ('localhost', '127.0.0.1', '::1');" \
-    && mysql -u root -e "FLUSH PRIVILEGES;" \
-    && killall mysqld && sleep 5
+# Initialize MariaDB and set root password using socket auth (no skip-grant-tables)
+RUN mkdir -p /run/mysqld && chown -R mysql:mysql /run/mysqld \
+ && mysqld_safe --datadir=/var/lib/mysql --socket=/run/mysqld/mysqld.sock & \
+    for i in $(seq 1 30); do mysqladmin --protocol=socket -uroot ping 2>/dev/null && break; sleep 1; done \
+ && mysql --protocol=socket -uroot -e "\
+      UPDATE mysql.user \
+        SET plugin='mysql_native_password' \
+        WHERE user='root' AND host='localhost'; \
+      SET PASSWORD FOR 'root'@'localhost' = PASSWORD('${MYSQL_ROOT_PASSWORD}'); \
+      DELETE FROM mysql.user WHERE user=''; \
+      DELETE FROM mysql.user WHERE user='root' AND host NOT IN ('localhost','127.0.0.1','::1'); \
+      FLUSH PRIVILEGES;" \
+ && killall mysqld || true && sleep 3
 
 # Update MariaDB debian.cnf with root password
 RUN sed -i "s/password\s*=.*/password = $MYSQL_ROOT_PASSWORD/" /etc/mysql/debian.cnf
