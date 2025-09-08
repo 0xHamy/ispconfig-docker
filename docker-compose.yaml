@@ -1,7 +1,9 @@
+version: '3.8'
 services:
   ispconfig:
     build: .
     container_name: ispconfig
+    hostname: ipsconfig.local
     restart: unless-stopped
     ports:
       - "8800:8080"
