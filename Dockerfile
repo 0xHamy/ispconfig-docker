@@ -1,12 +1,12 @@
-# Use Ubuntu 24.04 as the base image
-FROM ubuntu:24.04
+# Use Ubuntu 20.04 as the base image
+FROM ubuntu:20.04
 
 # Set environment variables to avoid interactive prompts
 ENV DEBIAN_FRONTEND=noninteractive
 ENV TZ=Etc/UTC
 ENV MYSQL_ROOT_PASSWORD=howtoforge
-ENV DOMAIN=server1.example.com
-ENV LIST_ADMIN_EMAIL=listadmin@example.com
+ENV DOMAIN=ispconfig.local
+ENV LIST_ADMIN_EMAIL=listadmin@ispconfig.local
 ENV MAILMAN_PASSWORD=mailmanpass
 
 # Update package lists and install basic tools
@@ -35,7 +35,7 @@ RUN echo "postfix postfix/main_mailer_type select Internet Site" | debconf-set-s
     && apt-get install -y \
         postfix postfix-mysql postfix-doc \
         mariadb-client mariadb-server \
-        openssl getmail4 rkhunter binutils \
+        openssl getmail6 rkhunter binutils \
         dovecot-imapd dovecot-pop3d dovecot-mysql dovecot-sieve \
         sudo patch \
     && apt-get clean
@@ -58,13 +58,13 @@ RUN sed -i '/^#submission inet n/s/^#//' /etc/postfix/master.cf \
 RUN sed -i 's/bind-address\s*=\s*127.0.0.1/#bind-address = 127.0.0.1/' /etc/mysql/mariadb.conf.d/50-server.cnf
 
 # Secure MariaDB installation non-interactively
-RUN /usr/bin/mysqld_safe & \
+RUN /usr/bin/mysqld_safe --skip-grant-tables & \
     sleep 10 \
-    && mysqladmin -u root password "$MYSQL_ROOT_PASSWORD" \
-    && mysql -u root -p"$MYSQL_ROOT_PASSWORD" -e "DELETE FROM mysql.user WHERE User='';" \
-    && mysql -u root -p"$MYSQL_ROOT_PASSWORD" -e "DELETE FROM mysql.user WHERE User='root' AND Host NOT IN ('localhost', '127.0.0.1', '::1');" \
-    && mysql -u root -p"$MYSQL_ROOT_PASSWORD" -e "FLUSH PRIVILEGES;" \
-    && mysql -u root -p"$MYSQL_ROOT_PASSWORD" -e "UPDATE mysql.user SET plugin = 'mysql_native_password' WHERE user='root';" \
+    && mysql -u root -e "FLUSH PRIVILEGES;" \
+    && mysql -u root -e "ALTER USER 'root'@'localhost' IDENTIFIED BY '$MYSQL_ROOT_PASSWORD';" \
+    && mysql -u root -e "DELETE FROM mysql.user WHERE User='';" \
+    && mysql -u root -e "DELETE FROM mysql.user WHERE User='root' AND Host NOT IN ('localhost', '127.0.0.1', '::1');" \
+    && mysql -u root -e "FLUSH PRIVILEGES;" \
     && killall mysqld && sleep 5
 
 # Update MariaDB debian.cnf with root password
